@@ -11,13 +11,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade \
+        "pip>=26.2.0" \
+        "setuptools>=78.1.1" && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # ============================
 # Stage 2 — Security Tools & Node (External bins)
 # ============================
-FROM aquasec/trivy:0.69.2 AS trivy-bin
-FROM ghcr.io/anchore/syft:v1.42.1 AS syft-bin
+FROM aquasec/trivy:0.74.0 AS trivy-bin
+FROM ghcr.io/anchore/syft:v1.51.1 AS syft-bin
 FROM node:22-slim AS node-binaries
 
 # ============================
@@ -35,20 +38,29 @@ LABEL org.opencontainers.image.description="Policy-driven AI, supply-chain and c
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.revision="${BUILD_SHA}"
 
-
 # Create non-root user early
 RUN groupadd -r appuser --gid=1000 && \
     useradd -r -g appuser --uid=1000 --home-dir=/app --shell=/sbin/nologin appuser
 
 # Install system dependencies
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    git \
     curl \
     ca-certificates \
     tar \
     && apt-get purge -y --auto-remove \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# --- NEW: remove base image's own system pip (CVE-2026-8643, HIGH) ---
+# Unused at runtime: the app and its deps are installed exclusively via
+# /opt/venv/bin/pip (see Stage 1 and the `pip install -e ".[dev]"` step below).
+RUN /usr/local/bin/python3 -m pip uninstall -y pip setuptools wheel 2>/dev/null || true && \
+    rm -rf /usr/local/lib/python3.12/site-packages/pip* \
+           /usr/local/lib/python3.12/site-packages/setuptools* \
+           /usr/local/lib/python3.12/site-packages/wheel* \
+           /usr/local/lib/python3.12/site-packages/pkg_resources \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
+# --- END NEW ---
 
 WORKDIR /app
 
@@ -66,7 +78,7 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && 
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 # Update npm to latest
-RUN npm install -g npm@latest tar@7.5.11 && \
+RUN npm install -g npm@11.19.1 tar@7.5.22 && \
     npm install -g ts-prune && \
     npm cache clean --force
 
